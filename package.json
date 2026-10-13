@@ -1,0 +1,74 @@
+{
+  "name": "github-copilot-codearts",
+  "displayName": "CodeBuddy for Copilot",
+  "description": "将腾讯 CodeBuddy 国内版与阿里 Qoder 中国版模型接入 VS Code Copilot Chat 与 Agent。",
+  "version": "0.0.1",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.140.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguageModelChatProvider:codebuddy",
+    "onLanguageModelChatProvider:qodercn"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "codebuddy",
+        "displayName": "CodeBuddy",
+        "managementCommand": "github-copilot-codearts.manageCodeBuddy"
+      },
+      {
+        "vendor": "qodercn",
+        "displayName": "Qoder (中国版)",
+        "managementCommand": "github-copilot-codearts.manageQoderCn"
+      }
+    ],
+    "commands": [
+      {
+        "command": "github-copilot-codearts.manageCodeBuddy",
+        "title": "CodeBuddy: 登录 / 管理账号"
+      },
+      {
+        "command": "github-copilot-codearts.logoutCodeBuddy",
+        "title": "CodeBuddy: 退出登录"
+      },
+      {
+        "command": "github-copilot-codearts.manageQoderCn",
+        "title": "Qoder (中国版): 登录 / 管理账号"
+      },
+      {
+        "command": "github-copilot-codearts.logoutQoderCn",
+        "title": "Qoder (中国版): 退出登录"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "copy-wasm": "node -e \"require('fs').copyFileSync('src/qoder-cn-wasm.wasm','out/qoder-cn-wasm.wasm')\"",
+    "compile": "tsc -p ./ && npm run copy-wasm",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.140.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "typescript-eslint": "^8.61.1",
+    "eslint": "^10.5.0",
+    "typescript": "^6.0.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  }
+}
