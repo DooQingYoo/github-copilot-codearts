@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { credentialExpiresAtMs } from '../codebuddy-auth';
-import { consumeSse, mergeCodeBuddyModels, messagesToOpenAi, parseCodeBuddyModels } from '../codebuddy-provider';
+import { codeBuddyEffortsFor, consumeSse, mergeCodeBuddyModels, messagesToOpenAi, parseCodeBuddyModels } from '../codebuddy-provider';
 
 suite('Extension Test Suite', () => {
 	test('只展示 CodeBuddy 对话目录中的可用模型', () => {
@@ -24,6 +24,42 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(models[0]?.maxInputTokens, 100_000);
 		assert.strictEqual(models[0]?.capabilities.imageInput, true);
 		assert.strictEqual(models[0]?.capabilities.toolCalling, true);
+	});
+
+	test('思考档位：有档位的模型才声明 reasoningEffort，默认档落在枚举内', () => {
+		const models = parseCodeBuddyModels({
+			data: {
+				agents: [{ name: 'cli', models: ['deepseek-v4-pro', 'glm-5.3', 'unknown-model'] }],
+				models: [
+					{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+					{ id: 'glm-5.3', name: 'GLM-5.3' },
+					{ id: 'unknown-model', name: 'Unknown' },
+				],
+			},
+		});
+		const byId = new Map(models.map((model) => [model.id, model]));
+
+		const pro = byId.get('deepseek-v4-pro');
+		assert.ok(pro?.configurationSchema, 'deepseek-v4-pro 应暴露思考档位');
+		const proProp = pro.configurationSchema.properties?.reasoningEffort;
+		assert.deepStrictEqual([...(proProp?.enum ?? [])], ['low', 'high', 'xhigh']);
+		assert.strictEqual(proProp?.default, 'xhigh');
+		assert.strictEqual((proProp?.enumItemLabels ?? [])[0], '低');
+
+		// ⚠️ 目录外的模型不得凭空声明档位（否则用户会选到一个上游不认的值 → 400）。
+		assert.strictEqual(byId.get('unknown-model')?.configurationSchema, undefined);
+	});
+
+	test('CodeBuddy 兜底目录也为模型声明思考档位', () => {
+		// 远端目录不可用时会回退到兜底表，兜底表同样不能丢掉选择器。
+		const models = parseCodeBuddyModels('not-an-object');
+		for (const model of models) {
+			assert.strictEqual(
+				model.configurationSchema !== undefined,
+				codeBuddyEffortsFor(model.id).length > 0,
+				`${model.id} 的 schema 应与档位表一致`,
+			);
+		}
 	});
 
 	test('合并 CodeBuddy 双目录且保留 scoped 模型优先级', () => {

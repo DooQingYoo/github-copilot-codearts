@@ -1,4 +1,4 @@
-# CodeBuddy for Copilot
+# github copilot codearts
 
 将腾讯 CodeBuddy 国内版与阿里 Qoder（中国版）模型接入 VS Code Copilot Chat 和 Agent 模式，推理请求使用对应账号的模型额度。
 
@@ -59,6 +59,10 @@ npm test          # 编译 + lint + 在 Extension Development Host 中跑测试
 - Qoder（中国版）接入 `qoder.cn` / `openapi.qoder.com.cn` / `gateway.qoder.com.cn`，推理走**加密端点**（`agent_chat_generation`，请求体由随扩展分发的 WASM 加密），因此必须走 `npm run compile` 把 WASM 复制到 `out/`。
 - CodeBuddy 模型目录失败时，内置兜底列出 DeepSeek V4 Flash、Hy4 Preview 和 GLM-5.3。
 - Qoder（中国版）目前**只提供推理**，未接入积分余额 / 每日领取。
-- Qoder（中国版）的**思考档位**数据已就位，但当前 VS Code（`@types/vscode@1.140.0`）的 `LanguageModelChatInformation` 尚无 `reasoningEfforts` 字段，故暂未向 VS Code 声明；等 VS Code 暴露该 API 后即可接上。
+- 两个 provider 都支持**自由选择思考强度**：通过 `configurationSchema` 在模型选择器里暴露 `reasoningEffort`（Qoder 用内置目录里的实测档位、CodeBuddy 用对齐官方客户端的档位表）。
+  - CodeBuddy 透传为 `reasoning_effort`，DeepSeek 系额外带 `thinking:{type:'enabled'}`（实测该字段单独不生效、`reasoning_effort` 才是开关）。
+  - Qoder 透传为 `parameters.reasoning_effort`，并按「选中 `none` → `enable_thinking=false`」推出开关。
+  - ⚠️ 只对**有档位**的模型声明选择器；选择器里的值在发送前会**再校验一次**（防止缓存的旧目录带来非法档位 → 上游 400）。
+  - ⚠️ 这些字段属较新 API：类型定义由本仓库的 `src/vscode.proposed.modelConfiguration.d.ts` 本地补充（`@types/vscode@1.140.0` 尚未收录）。运行时若 VS Code 不读它，则降级为「不可配置」而非报错。
 - 图片以 Base64 内联发送；超大图可能受请求体限制。
 - 使用 GitHub Copilot Business/Enterprise 时，管理员可能禁用自带模型策略。

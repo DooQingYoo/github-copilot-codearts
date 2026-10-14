@@ -17,7 +17,9 @@ import * as vscode from 'vscode';
 import {
 	type QoderCnFallbackModel,
 	QODER_CN_FALLBACK_MODELS,
+	QODER_CN_EFFORT_NAMES,
 	qoderCnDisplayName,
+	qoderCnEffortsFor,
 } from './qoder-cn-models';
 import {
 	QODER_CN,
@@ -485,6 +487,28 @@ export class QoderCnChatProvider implements vscode.LanguageModelChatProvider<Qod
 	}
 
 	private toModel(model: QoderCnFallbackModel, now: Date): QoderCnModel {
+		// 思考档位：目录里已有权威数据（`efforts` + `supportsDisable`），把它暴露成
+		// 模型级配置项，用户即可在模型选择器里自由切换思考强度。
+		// ⚠️ 没有可用档位时**不声明** `configurationSchema`（而不是声明一个空枚举）——
+		// 空枚举会让 UI 出现一个无意义的空下拉。
+		const efforts = qoderCnEffortsFor(model);
+		const defaultEffort = model.defaultEffort !== undefined && efforts.includes(model.defaultEffort)
+			? model.defaultEffort
+			: efforts[efforts.length - 1];
+		const configurationSchema = efforts.length > 0
+			? {
+				properties: {
+					reasoningEffort: {
+						type: 'string',
+						title: '思考强度',
+						enum: efforts,
+						enumItemLabels: efforts.map((e) => QODER_CN_EFFORT_NAMES[e] ?? e),
+						default: defaultEffort,
+						group: 'navigation',
+					},
+				},
+			}
+			: undefined;
 		return {
 			id: model.id,
 			name: qoderCnDisplayName(model, now),
@@ -497,6 +521,7 @@ export class QoderCnChatProvider implements vscode.LanguageModelChatProvider<Qod
 				imageInput: model.supportsImage === true,
 				toolCalling: true,
 			},
+			configurationSchema,
 		};
 	}
 
@@ -533,7 +558,20 @@ export class QoderCnChatProvider implements vscode.LanguageModelChatProvider<Qod
 
 		const fallback = QODER_CN_FALLBACK_MODELS.find((m) => m.id === model.id);
 		const history = messagesToQoder(messages);
-		const request = await this.buildRequest(credential, fallback, history, model, qoderTools(options.tools));
+		// 用户选择的思考强度（未选/不受支持时为 undefined，退回目录里的默认档）。
+		const requestedEffort = options.modelConfiguration?.reasoningEffort;
+		const reasoningEffort = typeof requestedEffort === 'string' && fallback !== undefined
+			&& qoderCnEffortsFor(fallback).includes(requestedEffort)
+			? requestedEffort
+			: undefined;
+		const request = await this.buildRequest(
+			credential,
+			fallback,
+			history,
+			model,
+			qoderTools(options.tools),
+			reasoningEffort,
+		);
 
 		const controller = new AbortController();
 		const cancellation = token.onCancellationRequested(() => controller.abort());
@@ -580,6 +618,7 @@ export class QoderCnChatProvider implements vscode.LanguageModelChatProvider<Qod
 		history: readonly QoderInferMessage[],
 		model: QoderCnModel,
 		tools: QoderInferTool[],
+		reasoningEffort?: string,
 	): Promise<QoderInferRequest> {
 		let client: QoderEncryptedInfer | undefined;
 		try {
@@ -595,7 +634,12 @@ export class QoderCnChatProvider implements vscode.LanguageModelChatProvider<Qod
 			return client.prepareInfer({
 				modelKey: model.id,
 				userText: lastUserText(history),
-				isReasoning: fallback?.supportsThinking ?? false,
+				// 显式选档时以档位为准（`enable_thinking` 由 `reasoning_effort !== 'none'` 推出）；
+				// 未选档时退回目录里的能力声明。
+				isReasoning: reasoningEffort !== undefined
+					? reasoningEffort !== 'none'
+					: fallback?.supportsThinking ?? false,
+				...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
 				history,
 				tools,
 				...(Number.isFinite(model.maxOutputTokens) && model.maxOutputTokens > 0

@@ -44,6 +44,24 @@
 | 图片 | 带图消息的 `content` 必须是**多模态数组**（`{type:'image_url',...}`），压成纯文本会静默丢图 |
 | 消息 part 判定 | 用 `instanceof vscode.LanguageModelTextPart` 等，不要靠 `type` 字段（`LanguageModelInputPart` 是类实例联合会） |
 | 结束帧 | 见下「SSE 结束帧」 |
+| 思考强度选择器 | 见下「思考强度（reasoningEffort）」 |
+
+## ⚠️ 思考强度（`reasoningEffort`）：schema 声明 + 发送前再校验
+
+两个 provider 都支持用户在模型选择器里**自由切换思考强度**。三条不变式：
+
+1. **数据是契约，不能编** —— 档位值原样发上游，发未知档位会被以非法参数 400 拒绝。
+   - Qoder 用 `qoderCn-models.ts` 里的实测 `efforts` / `supportsDisable`（`qoderCnEffortsFor` 会按 `supportsDisable` 补 `'none'`）。
+   - CodeBuddy 用 `codebuddy-provider.ts` 的 `CODEBUDDY_EFFORTS`（对齐官方客户端与参考实现 `deepseek-harness-codearts` 的 `REASONING_EFFORTS`）。
+   - ⚠️ **只有可枚举档位的模型才声明 `configurationSchema`**；不声明 = 不可配置。**不要声明空枚举**（UI 会出现无意义空下拉）。
+2. **发送前必须再校验一次**：用户选的档位可能来自**缓存的旧目录**，`efforts.includes(selected)` 不成立就按未选处理（不要发）。
+3. **两个 provider 的字段名/开关语义不同**（同族不等于同字段）：
+   - CodeBuddy：`reasoning_effort` +（DeepSeek 系）`thinking:{type:'enabled'}`。实测**`reasoning_effort` 才是真正的开关**，`thinking` 单独不生效（保留它只为对齐官方出站形态）。
+   - Qoder：`parameters.reasoning_effort`，且 `enable_thinking = (effort !== 'none')` —— **关闭思考靠把 `enable_thinking` 翻 false**，不是照发 `'none'`。
+
+⚠️ **类型定义是本仓库本地补的**（`src/vscode.proposed.modelConfiguration.d.ts`）：
+`@types/vscode@1.140.0` 尚无 `configurationSchema` / `modelConfiguration`，而 VS Code 1.141+ / Copilot Chat 0.48+ 已支持。运行时若 VS Code 不读该字段，**降级为「不可配置」而非报错**，故调用点一律用 `options.modelConfiguration?.x` 兜底。
+⚠️ 不要把这条经验写死成「VS Code 不支持思考档位」 —— 官方曾用 `reasoningEfforts` 字段名，本版本换成了 `configurationSchema` + `modelConfiguration` 这套通用 JSON Schema 机制。
 
 ## ⚠️ Qoder（中国版）协议：逐条踩过的坑
 

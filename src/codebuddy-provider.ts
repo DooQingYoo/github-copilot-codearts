@@ -6,6 +6,69 @@ const DOMAIN = 'copilot.tencent.com';
 const USER_AGENT = 'CodeBuddyIDE/1.106.1';
 const CATALOG_TTL_MS = 5 * 60_000;
 
+/**
+ * 各模型可选的思考强度（对齐 CodeBuddy 官方客户端与本仓库参考实现
+ * `deepseek-harness-codearts` 的 `REASONING_EFFORTS` 实测表）。
+ *
+ * ⚠️ 只列**可枚举**强度的模型；不在表内的模型不暴露选择器（不是「空枚举」）。
+ * ⚠️ 值与上游是**逐字契约**：发未知档位服务端会以非法参数 400 拒绝，
+ * 故发送前必须再用本表校验一次（用户选择可能来自缓存的旧目录）。
+ */
+const CODEBUDDY_EFFORTS: Readonly<Record<string, readonly string[]>> = {
+	'deepseek-v4-flash': ['low', 'high', 'max'],
+	'deepseek-v4.1-flash': ['low', 'high', 'max'],
+	'deepseek-v4-pro': ['low', 'high', 'xhigh'],
+	'hy4-preview': ['high'],
+	'hy4-preview-x': ['high'],
+	'hy3': ['low', 'high'],
+	'hy3-x': ['low', 'high'],
+	'glm-5.3': ['low', 'high', 'max'],
+	'glm-5.3-flash': ['low', 'high', 'max'],
+	'glm-5.2': ['high', 'xhigh'],
+};
+
+/** 思考强度 id → 展示名。 */
+const CODEBUDDY_EFFORT_NAMES: Readonly<Record<string, string>> = {
+	low: '低',
+	medium: '中',
+	high: '高',
+	xhigh: '极高',
+	max: '最大',
+};
+
+/** 该模型的可用思考档位（无则返回空数组 = 不暴露选择器）。 */
+export function codeBuddyEffortsFor(modelId: string): readonly string[] {
+	return CODEBUDDY_EFFORTS[modelId] ?? [];
+}
+
+/**
+ * DeepSeek 系模型「开思考」必须显式带 `thinking:{type:'enabled'}`。
+ * 实测（参考实现直连三站点对照）：**`reasoning_effort` 才是真正的开关**，
+ * `thinking` 字段单独不生效；两者都带才稳妥（对齐官方客户端出站形态）。
+ */
+function isDeepSeekModel(modelId: string): boolean {
+	return modelId.toLowerCase().includes('deepseek');
+}
+
+/** 为模型生成思考强度选择器的 schema（无档位时返回 undefined）。 */
+function codeBuddyConfigurationSchema(modelId: string):
+	vscode.LanguageModelConfigurationSchema | undefined {
+	const efforts = codeBuddyEffortsFor(modelId);
+	if (efforts.length === 0) {return undefined;}
+	return {
+		properties: {
+			reasoningEffort: {
+				type: 'string',
+				title: '思考强度',
+				enum: [...efforts],
+				enumItemLabels: efforts.map((effort) => CODEBUDDY_EFFORT_NAMES[effort] ?? effort),
+				default: efforts[efforts.length - 1],
+				group: 'navigation',
+			},
+		},
+	};
+}
+
 interface CodeBuddyModel extends vscode.LanguageModelChatInformation {
 	readonly id: string;
 }
@@ -238,6 +301,7 @@ export function parseCodeBuddyModels(payload: unknown): CodeBuddyModel[] {
 			maxOutputTokens: outputTokens,
 			detail: 'CodeBuddy',
 			capabilities: { imageInput: meta?.supportsImages === true, toolCalling: true },
+			configurationSchema: codeBuddyConfigurationSchema(id),
 		} satisfies CodeBuddyModel];
 	});
 	return models.length > 0 ? models : fallbackModels();
@@ -262,10 +326,21 @@ function numeric(value: unknown, fallback: number): number {
 }
 
 function fallbackModels(): CodeBuddyModel[] {
+	const build = (id: string, name: string, maxInputTokens: number, maxOutputTokens: number): CodeBuddyModel => ({
+		id,
+		name,
+		family: id,
+		version: '1',
+		maxInputTokens,
+		maxOutputTokens,
+		detail: 'CodeBuddy',
+		capabilities: { imageInput: true, toolCalling: true },
+		configurationSchema: codeBuddyConfigurationSchema(id),
+	});
 	return [
-		{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', family: 'deepseek-v4-flash', version: '1', maxInputTokens: 1_000_000, maxOutputTokens: 50_000, detail: 'CodeBuddy', capabilities: { imageInput: true, toolCalling: true } },
-		{ id: 'hy4-preview', name: 'Hy4 Preview', family: 'hy4-preview', version: '1', maxInputTokens: 1_000_000, maxOutputTokens: 64_000, detail: 'CodeBuddy', capabilities: { imageInput: true, toolCalling: true } },
-		{ id: 'glm-5.3', name: 'GLM-5.3', family: 'glm-5.3', version: '1', maxInputTokens: 1_000_000, maxOutputTokens: 64_000, detail: 'CodeBuddy', capabilities: { imageInput: true, toolCalling: true } },
+		build('deepseek-v4-flash', 'DeepSeek V4 Flash', 1_000_000, 50_000),
+		build('hy4-preview', 'Hy4 Preview', 1_000_000, 64_000),
+		build('glm-5.3', 'GLM-5.3', 1_000_000, 64_000),
 	];
 }
 
@@ -323,6 +398,15 @@ export class CodeBuddyChatProvider implements vscode.LanguageModelChatProvider<C
 				stream_options: { include_usage: true },
 				max_tokens: model.maxOutputTokens,
 			};
+			// 思考强度：把模型选择器里选中的档位透传为 `reasoning_effort`。
+			// ⚠️ 必须再校验一次（用户选择可能来自缓存的旧目录，发未知档位会 400）。
+			const requestedEffort = options.modelConfiguration?.reasoningEffort;
+			const efforts = codeBuddyEffortsFor(model.id);
+			if (typeof requestedEffort === 'string' && efforts.includes(requestedEffort)) {
+				body.reasoning_effort = requestedEffort;
+				// DeepSeek 系「开思考」还须显式带 `thinking`（对齐官方客户端出站形态）。
+				if (isDeepSeekModel(model.id)) {body.thinking = { type: 'enabled' };}
+			}
 			const tools = toolDefinitions(options.tools);
 			if (tools) {
 				body.tools = tools;

@@ -21,7 +21,7 @@ import {
 	qoderCnEffortsFor,
 	promotionActiveNow,
 } from '../qoder-cn-models';
-import { consumeQoderSse, messagesToQoder, qoderTools } from '../qoder-cn-provider';
+import { consumeQoderSse, messagesToQoder, qoderTools, QoderCnChatProvider } from '../qoder-cn-provider';
 import { buildQoderInferPayload } from '../qoder-cn-wasm';
 
 suite('Qoder (中国版) 测试', () => {
@@ -124,6 +124,33 @@ suite('Qoder (中国版) 测试', () => {
 		assert.strictEqual(qoderCnEffortsFor(qfmodel).includes('none'), true);
 	});
 
+	test('模型声明思考强度选择器（enum 与目录档位一致、默认档落在枚举内）', () => {
+		const provider = new QoderCnChatProvider({ resolveCredential: async () => undefined });
+		const models = provider.listModels();
+		assert.ok(models.length > 0);
+		// ⚠️ 逐模型核对：**每个**有档位的模型都要声明 schema，且默认档必须落在枚举内
+		// （否则 UI 里的默认选中项是个不存在的值，用户不选就会发出非法档位）。
+		let declared = 0;
+		for (const model of models) {
+			const fallback = QODER_CN_FALLBACK_MODELS.find((m) => m.id === model.id);
+			assert.ok(fallback);
+			const efforts = qoderCnEffortsFor(fallback);
+			const schema = model.configurationSchema;
+			if (efforts.length === 0) {
+				assert.strictEqual(schema, undefined, `${model.id} 无档位时不应声明 schema`);
+				continue;
+			}
+			declared += 1;
+			assert.ok(schema, `${model.id} 应声明 configurationSchema`);
+			const prop = schema.properties?.reasoningEffort;
+			assert.ok(prop, `${model.id} 应声明 reasoningEffort`);
+			assert.deepStrictEqual([...(prop.enum ?? [])], [...efforts]);
+			assert.ok(prop.enum?.includes(prop.default as string), `${model.id} 默认档须在枚举内`);
+			assert.strictEqual((prop.enumItemLabels ?? []).length, efforts.length);
+		}
+		assert.ok(declared > 0, '至少应有一个模型暴露思考档位');
+	});
+
 	test('错峰折扣按 UTC+8 本地推算', () => {
 		// 22:00–08:00 窗口：UTC+8 的 23:00 命中、12:00 不命中
 		const promo = { active: false, discountFactor: 0.4, beforePromotionPriceFactor: 0.5, windowStart: '22:00', windowEnd: '08:00' };
@@ -183,6 +210,31 @@ suite('Qoder (中国版) 测试', () => {
 		assert.strictEqual((payload.tools as unknown[]).length, 1);
 		// chat_context 不能是空对象
 		assert.strictEqual((payload.chat_context as Record<string, unknown>).text, '你好');
+	});
+
+	test('思考档位透传为 reasoning_effort，并据「关闭」推出 enable_thinking=false', () => {
+		// 选中档位：应与 enable_thinking=true 一起下发
+		const on = buildQoderInferPayload(
+			{ modelKey: 'dmodel', userText: 'hi', isReasoning: true, reasoningEffort: 'high' },
+			'id-on',
+		);
+		const onParams = on.parameters as Record<string, unknown>;
+		assert.strictEqual(onParams.reasoning_effort, 'high');
+		assert.strictEqual(onParams.enable_thinking, true);
+
+		// 关闭思考：`none` 必须把 enable_thinking 翻成 false，而不是照发 `none`
+		const off = buildQoderInferPayload(
+			{ modelKey: 'dmodel', userText: 'hi', isReasoning: true, reasoningEffort: 'none' },
+			'id-off',
+		);
+		const offParams = off.parameters as Record<string, unknown>;
+		assert.strictEqual(offParams.reasoning_effort, 'none');
+		assert.strictEqual(offParams.enable_thinking, false);
+
+		// 未选档位：不得凭空补字段（保持网关默认）
+		const bare = buildQoderInferPayload({ modelKey: 'dmodel', userText: 'hi' }, 'id-bare');
+		const bareParams = bare.parameters as Record<string, unknown>;
+		assert.strictEqual('reasoning_effort' in bareParams, false);
 	});
 
 	test('信封里包着 [DONE] 的结束帧被静默跳过（不报无法解析）', async () => {
