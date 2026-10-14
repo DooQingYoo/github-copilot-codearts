@@ -48,6 +48,64 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
+/**
+ * 转发模型思维链（`delta.reasoning_content`）到 Copilot 的「思考过程」块。
+ *
+ * ⚠️ `LanguageModelThinkingPart` 属 **proposed API**（类型见
+ * `src/vscode.proposed.languageModelThinkingPart.d.ts`）。运行时若不支持则**静默跳过** ——
+ * 思考链是增强功能，绝不能因为它导致整轮请求失败。
+ */
+function reportThinking(
+	text: unknown,
+	progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+): void {
+	if (typeof text !== 'string' || text.length === 0) {
+		return;
+	}
+	const ThinkingPart = (vscode as unknown as { LanguageModelThinkingPart?: new (value: string | string[], id?: string) => unknown }).LanguageModelThinkingPart;
+	if (ThinkingPart === undefined) {
+		return;
+	}
+	progress.report(new ThinkingPart(text) as unknown as vscode.LanguageModelResponsePart);
+}
+
+/**
+ * 估算纯文本的 token 数（不引入 tokenizer，纯启发式）。
+ *
+ * ⚠️ 不能再用 `chars / 4` —— 那是英文经验值，对中文会**低估约 4 倍**。
+ * 这里按 CJK 与其余字符分别加权：CJK 约 1.0 token/字，其余约 1 token / 3.7 字符。
+ *
+ * 这是**有意为之的粗略估算**：Copilot 的上下文指示器读的是 usage（见 `reportUsage`），
+ * 本函数只服务工具预算/溢出判断，无需精确。
+ */
+function estimateTextTokens(text: string): number {
+	let cjk = 0;
+	let other = 0;
+	for (const ch of text) {
+		const code = ch.codePointAt(0) ?? 0;
+		if (
+			(code >= 0x3040 && code <= 0x30ff)   // 日文假名
+			|| (code >= 0x3400 && code <= 0x4dbf) // CJK 扩展 A
+			|| (code >= 0x4e00 && code <= 0x9fff) // CJK 基本区
+			|| (code >= 0xac00 && code <= 0xd7af) // 韩文音节
+			|| (code >= 0xf900 && code <= 0xfaff) // CJK 兼容表意文字
+			|| (code >= 0xff00 && code <= 0xffef) // 全角/半角形式
+		) {
+			cjk += 1;
+		} else {
+			other += 1;
+		}
+	}
+	return Math.ceil(cjk + other / 3.7);
+}
+
+/** 消息级固定开销：每条消息的角色/分隔符，加名字位（对齐 OpenAI 的经验值）。 */
+const BASE_TOKENS_PER_MESSAGE = 3;
+const BASE_TOKENS_PER_NAME = 1;
+/** 工具集固定开销：一次请求带工具定义时的固定成本 + 每个工具的成本。 */
+const BASE_TOKENS_PER_TOOL_SET = 16;
+const BASE_TOKENS_PER_TOOL = 8;
+
 /** 从内容块里取纯文本。 */
 function textFrom(value: unknown): string {
 	if (typeof value === 'string') {
@@ -234,6 +292,36 @@ interface SseOutcome {
 }
 
 /**
+ * 向 Copilot Chat 上报真实 token 用量。
+ *
+ * ⚠️ Copilot 的上下文占用指示器（「N/M 个令牌」）**只读 `usage.promptTokens`**：
+ * 它的分子是 `promptTokens + completionTokens`，而第三方 provider 无法通过
+ * `provideTokenCount` 影响它。上报通道是 `LanguageModelDataPart` + **MIME `'usage'`**，
+ * 载荷为 OpenAI 形状的 usage JSON；缺少它时界面恒显示 `0/窗口`。
+ */
+function reportUsage(
+	usage: unknown,
+	progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+): void {
+	if (!isRecord(usage)) {
+		return;
+	}
+	const promptTokens = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0;
+	const completionTokens = typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0;
+	progress.report(
+		new vscode.LanguageModelDataPart(
+			new TextEncoder().encode(JSON.stringify({
+				prompt_tokens: promptTokens,
+				completion_tokens: completionTokens,
+				total_tokens: typeof usage.total_tokens === 'number' ? usage.total_tokens : promptTokens + completionTokens,
+				prompt_tokens_details: usage.prompt_tokens_details ?? { cached_tokens: 0 },
+			})),
+			'usage',
+		),
+	);
+}
+
+/**
  * 消费 Qoder 加密端点的信封 SSE，向 `progress` 报告文本与工具调用。
  *
  * 逐帧剥信封后按标准 OpenAI chunk 解析（内层未加密）。
@@ -300,6 +388,9 @@ export async function consumeQoderSse(
 			// 只抛 `code` 会丢掉可定位信息。
 			throw new Error(message ?? `Qoder 返回业务错误：${frame.slice(0, 2000)}`);
 		}
+		// ⚠️ usage 帧可能**不带 `choices`**（OpenAI 约定的最后一帧只带 usage），
+		// 必须在取 choices 之前处理，否则会被下面的空数组分支丢弃。
+		reportUsage(parsed.usage, progress);
 		const choices = parsed.choices;
 		if (!Array.isArray(choices)) {
 			return;
@@ -309,6 +400,9 @@ export async function consumeQoderSse(
 				continue;
 			}
 			const delta = choice.delta;
+			// ⚠️ 思维链：上游把推理放在 `reasoning_content`，与 `content` **并列**。
+			// 老实现只读 `content`，导致思考过程被整个丢弃（用户表现为「不显示思维链」）。
+			reportThinking(delta.reasoning_content, progress);
 			if (typeof delta.content === 'string' && delta.content.length > 0) {
 				progress.report(new vscode.LanguageModelTextPart(delta.content));
 			}
@@ -527,8 +621,41 @@ export class QoderCnChatProvider implements vscode.LanguageModelChatProvider<Qod
 	}
 
 	provideTokenCount(_model: QoderCnModel, text: string | vscode.LanguageModelChatRequestMessage): Thenable<number> {
-		const value = typeof text === 'string' ? text : textFrom(text.content);
-		return Promise.resolve(Math.ceil(value.length / 4));
+		if (typeof text === 'string') {
+			return Promise.resolve(estimateTextTokens(text));
+		}
+		// 消息按 part 逐项累加，并计入每条消息的固定开销（老实现两者都缺失）。
+		let total = BASE_TOKENS_PER_MESSAGE + BASE_TOKENS_PER_NAME;
+		for (const part of text.content) {
+			if (part instanceof vscode.LanguageModelTextPart) {
+				total += estimateTextTokens(part.value);
+			} else if (part instanceof vscode.LanguageModelDataPart) {
+				if (part.mimeType.startsWith('image/')) {
+					total += Math.ceil(part.data.byteLength / 100);
+				} else {
+					total += estimateTextTokens(new TextDecoder().decode(part.data));
+				}
+			} else if (part instanceof vscode.LanguageModelToolCallPart) {
+				total += BASE_TOKENS_PER_NAME + estimateTextTokens(JSON.stringify(part.input));
+			} else if (part instanceof vscode.LanguageModelToolResultPart) {
+				total += estimateTextTokens(textFrom(part.content));
+			} else if (isRecord(part) && typeof part.value === 'string') {
+				total += estimateTextTokens(part.value);
+			}
+		}
+		return Promise.resolve(total);
+	}
+
+	/** 估算一次请求里工具定义的 token 开销（与 CodeBuddy 保持同一口径）。 */
+	estimateToolTokens(tools: readonly vscode.LanguageModelChatTool[] | undefined): number {
+		if (!tools?.length) {
+			return 0;
+		}
+		let total = BASE_TOKENS_PER_TOOL_SET;
+		for (const tool of tools) {
+			total += BASE_TOKENS_PER_TOOL + estimateTextTokens(JSON.stringify(tool));
+		}
+		return total;
 	}
 
 	refreshModels(): void {

@@ -171,6 +171,10 @@ export function buildQoderInferPayload(
 	if (ask.maxTokens !== undefined) {
 		parameters.max_tokens = ask.maxTokens;
 	}
+	// ⚠️ OpenAI 兼容端点流式模式下**默认不下发 usage**，必须显式开启，
+	// 否则 Copilot 的上下文占用指示器永远拿不到真实 token 数（恒 0）。
+	// 该参数属标准 OpenAI 字段，位置与 `max_tokens` 一致（上游实测帧里能看到它生效）。
+	parameters.stream_options = { include_usage: true };
 	if (ask.reasoningEffort !== undefined) {
 		parameters.reasoning_effort = ask.reasoningEffort;
 		parameters.enable_thinking = ask.reasoningEffort !== 'none';
