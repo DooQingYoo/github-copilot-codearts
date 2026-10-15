@@ -1,7 +1,7 @@
 {
   "name": "github-copilot-codearts",
   "displayName": "github copilot codearts",
-  "description": "将腾讯 CodeBuddy 国内版与阿里 Qoder 中国版模型接入 VS Code Copilot Chat 与 Agent。",
+  "description": "将腾讯 CodeBuddy 国内版、阿里 Qoder 中国版与字节 TRAE 模型接入 VS Code Copilot Chat 与 Agent。",
   "version": "0.0.3",
   "license": "MIT",
   "engines": {
@@ -12,7 +12,8 @@
   ],
   "activationEvents": [
     "onLanguageModelChatProvider:codebuddy",
-    "onLanguageModelChatProvider:qodercn"
+    "onLanguageModelChatProvider:qodercn",
+    "onLanguageModelChatProvider:trae"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -26,6 +27,11 @@
         "vendor": "qodercn",
         "displayName": "Qoder (中国版)",
         "managementCommand": "github-copilot-codearts.manageQoderCn"
+      },
+      {
+        "vendor": "trae",
+        "displayName": "TRAE (字节)",
+        "managementCommand": "github-copilot-codearts.manageTrae"
       }
     ],
     "commands": [
@@ -44,6 +50,14 @@
       {
         "command": "github-copilot-codearts.logoutQoderCn",
         "title": "Qoder (中国版): 退出登录"
+      },
+      {
+        "command": "github-copilot-codearts.manageTrae",
+        "title": "TRAE (字节): 登录 / 管理账号"
+      },
+      {
+        "command": "github-copilot-codearts.logoutTrae",
+        "title": "TRAE (字节): 退出登录"
       }
     ]
   },
