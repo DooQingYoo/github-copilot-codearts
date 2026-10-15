@@ -1,8 +1,8 @@
 {
   "name": "github-copilot-codearts",
   "displayName": "github copilot codearts",
-  "description": "将腾讯 CodeBuddy 国内版、阿里 Qoder 中国版与字节 TRAE 模型接入 VS Code Copilot Chat 与 Agent。",
-  "version": "0.0.3",
+  "description": "将腾讯 CodeBuddy 国内版、阿里 Qoder 中国版、字节 TRAE 与 OpenRouter（可自选上游供应商）模型接入 VS Code Copilot Chat 与 Agent。",
+  "version": "0.0.5",
   "license": "MIT",
   "engines": {
     "vscode": "^1.140.0"
@@ -13,8 +13,12 @@
   "activationEvents": [
     "onLanguageModelChatProvider:codebuddy",
     "onLanguageModelChatProvider:qodercn",
-    "onLanguageModelChatProvider:trae"
+    "onLanguageModelChatProvider:trae",
+    "onLanguageModelChatProvider:openrouter-byok"
   ],
+  "repository": {
+    "url": "https://github.com/DooQingYoo/github-copilot-codearts.git"
+  },
   "main": "./out/extension.js",
   "contributes": {
     "languageModelChatProviders": [
@@ -32,6 +36,11 @@
         "vendor": "trae",
         "displayName": "TRAE (字节)",
         "managementCommand": "github-copilot-codearts.manageTrae"
+      },
+      {
+        "vendor": "openrouter-byok",
+        "displayName": "OpenRouter (可自选上游供应商)",
+        "managementCommand": "github-copilot-codearts.manageOpenRouter"
       }
     ],
     "commands": [
@@ -58,8 +67,33 @@
       {
         "command": "github-copilot-codearts.logoutTrae",
         "title": "TRAE (字节): 退出登录"
+      },
+      {
+        "command": "github-copilot-codearts.manageOpenRouter",
+        "title": "OpenRouter: 设置 API Key"
+      },
+      {
+        "command": "github-copilot-codearts.logoutOpenRouter",
+        "title": "OpenRouter: 清除 API Key"
+      },
+      {
+        "command": "github-copilot-codearts.pickOpenRouterProvider",
+        "title": "OpenRouter: 选择上游供应商"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "github copilot codearts",
+      "properties": {
+        "github-copilot-codearts.openrouter.pinnedProviders": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "按模型 id 指定 OpenRouter 的**上游供应商** slug（如 `{ \"deepseek/deepseek-v4.1-flash\": \"deepinfra/fp8\" }`）。\n\n指定的供应商会被严格锁定（`provider.order` 且**关闭回退**）：该家不可用时本轮请求会直接失败。\n\n留空或写 `\"auto\"` 表示交回 OpenRouter 按价格负载均衡。\n\n建议用命令 **OpenRouter: 选择上游供应商** 来设置（它会列出该模型当前真实可用的上下游）。",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
