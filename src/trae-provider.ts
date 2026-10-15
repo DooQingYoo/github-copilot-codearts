@@ -41,65 +41,6 @@ const TRAE_CHAT_URL = 'https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_ch
 const CATALOG_TTL_MS = 5 * 60_000;
 
 /**
- * 统一日志前缀。
- *
- * ⚠️ 用 `console.log` 而不是 `vscode.window.createOutputChannel`：前者直接进
- * 「调试控制台 / Extension Host 日志」，排障时无需用户额外打开面板。
- * 全部日志都带 `[TRAE]` 前缀，便于在混杂输出里过滤。
- */
-const LOG_PREFIX = '[TRAE]';
-
-/** 打印一条诊断日志（**只用于排障**，不承载业务逻辑）。 */
-function log(...args: unknown[]): void {
-	console.log(LOG_PREFIX, ...args);
-}
-
-/** 打印一条警告日志。 */
-function logWarn(...args: unknown[]): void {
-	console.warn(LOG_PREFIX, ...args);
-}
-
-/** 安全地把任意值转成可读短串（避免把整个响应体刷进日志）。 */
-function brief(value: unknown, max = 300): string {
-	let text: string;
-	try {
-		text = typeof value === 'string' ? value : JSON.stringify(value);
-	} catch {
-		text = String(value);
-	}
-	if (text === undefined) {return 'undefined';}
-	return text.length > max ? `${text.slice(0, max)}…(共 ${text.length} 字符)` : text;
-}
-
-/**
- * 汇总远端目录响应的**结构**，用于排障「模型列表不对」。
- *
- * 输出每个 `function` 的条目数与**被过滤掉的原因计数** —— 只看「最终剩几个」
- * 无法区分「上游没下发」与「被我们的白名单/过滤条件剔掉了」。
- */
-export function describeTraeCatalog(payload: unknown): string {
-	if (typeof payload !== 'object' || payload === null) {
-		return `响应不是对象（${typeof payload}）`;
-	}
-	const record = payload as Record<string, unknown>;
-	const groups = record.function_configs ?? record.FunctionConfigs;
-	if (!Array.isArray(groups)) {
-		return `响应里没有 function_configs 数组；顶层键=${Object.keys(record).join(',')}`;
-	}
-	const lines: string[] = [`function_configs 共 ${groups.length} 组`];
-	for (const group of groups) {
-		if (typeof group !== 'object' || group === null) {continue;}
-		const g = group as Record<string, unknown>;
-		const channel = String(g.function ?? g.Function ?? '(未声明)');
-		const list = g.config_info_list ?? g.ConfigInfoList;
-		const count = Array.isArray(list) ? list.length : 0;
-		const inWhitelist = TRAE_CHANNELS.includes(channel);
-		lines.push(`  ${channel}: ${count} 条${inWhitelist ? '' : '（不在白名单，整组丢弃）'}`);
-	}
-	return lines.join('\n');
-}
-
-/**
  * 推理档位 wire 值 → 展示名。
  *
  * ⚠️ TRAE 的 `reasoning_effort_config.options` 是**单值**（`light` / `high` /
@@ -552,16 +493,8 @@ export class TraeChatProvider implements vscode.LanguageModelChatProvider<TraeMo
 		options: vscode.PrepareLanguageModelChatModelOptions,
 		token: vscode.CancellationToken,
 	): Promise<TraeModel[]> {
-		log(`provideLanguageModelChatInformation: silent=${String(options.silent)}`);
-		const credential = await this.options.resolveCredential().catch((error: unknown) => {
-			logWarn('resolveCredential 失败：', error instanceof Error ? error.message : String(error));
-			return undefined;
-		});
-		if (credential === undefined) {
-			log('无凭据 → 返回空列表（请先登录）');
-			return [];
-		}
-		log(`凭据 uid=${credential.uid} machine_id=${credential.machine_id.slice(0, 8)}…`);
+		const credential = await this.options.resolveCredential().catch(() => undefined);
+		if (credential === undefined) {return [];}
 		// ⚠️ **silent 路径也必须拉目录**：`silent` 只表示「不要弹窗/不要触发登录」，
 		// 不表示「不要网络」。早期实现让 silent 直接返回 `listModels()`，而那时
 		// `remoteModels` 还是 undefined ⇒ 返回的是**内置兜底表**（旧模型），
@@ -570,9 +503,7 @@ export class TraeChatProvider implements vscode.LanguageModelChatProvider<TraeMo
 		if (Date.now() - this.catalogLoadedAt > CATALOG_TTL_MS || this.remoteModels === undefined) {
 			await this.loadModels(credential, token);
 		}
-		const models = this.listModels();
-		log(`返回 ${models.length} 个模型：${models.map((m) => m.id).join(', ')}`);
-		return models;
+		return this.listModels();
 	}
 
 	async provideLanguageModelChatResponse(
@@ -582,49 +513,31 @@ export class TraeChatProvider implements vscode.LanguageModelChatProvider<TraeMo
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
 		token: vscode.CancellationToken,
 	): Promise<void> {
-		log(`=== 对话开始 model=${model.id} 消息数=${messages.length} 工具数=${options.tools?.length ?? 0} ===`);
 		const credential = await this.options.resolveCredential();
 		if (credential === undefined) {
-			logWarn('无凭据 → 抛错');
 			throw new Error('请先运行“TRAE (字节): 登录 / 管理账号”');
 		}
 
 		const body = this.buildRequestBody(model, messages, options);
-		const bodyText = JSON.stringify(body);
-		log(`请求体 ${bodyText.length} 字符；function=${String(body.function)} config_name=${String(body.config_name)}`);
-		log(`请求体预览：${brief(bodyText, 1500)}`);
-
 		const controller = new AbortController();
 		const cancellation = token.onCancellationRequested(() => controller.abort());
 		try {
-			log(`POST ${TRAE_CHAT_URL}`);
 			const response = await this.fetcher(TRAE_CHAT_URL, {
 				method: 'POST',
 				headers: new Headers(traeSOLOHeaders(credential, true)),
-				body: bodyText,
+				body: JSON.stringify(body),
 				signal: controller.signal,
 			});
-			log(`HTTP ${response.status} ${response.statusText} content-type=${response.headers.get('content-type') ?? '(无)'}`);
 			if (!response.ok) {
 				const detail = await response.text().catch(() => '');
-				logWarn(`HTTP 非 2xx，响应体：${brief(detail, 2000)}`);
 				const kind = classifyTraeError(response.status, detail);
-				logWarn(`错误分类：${kind}`);
 				if (isTraeQuotaError(kind)) {
 					throw new Error(`TRAE 额度不足（HTTP ${response.status}）：${detail.slice(0, 500)}`);
 				}
 				throw new Error(`TRAE HTTP ${response.status}: ${detail.slice(0, 1000)}`);
 			}
-			if (!response.body) {
-				logWarn('响应没有 body');
-				throw new Error('TRAE 返回了空响应流');
-			}
+			if (!response.body) {throw new Error('TRAE 返回了空响应流');}
 			await consumeTraeSse(response.body, progress, token, model.id);
-			log('=== 对话结束（正常） ===');
-		} catch (error) {
-			logWarn('=== 对话失败 ===', error instanceof Error ? `${error.name}: ${error.message}` : String(error));
-			if (error instanceof Error && error.stack !== undefined) {logWarn(error.stack);}
-			throw error;
 		} finally {
 			cancellation.dispose();
 		}
@@ -727,30 +640,16 @@ export class TraeChatProvider implements vscode.LanguageModelChatProvider<TraeMo
 	/** 拉取远端目录；失败时**保留兜底表**（不抛错，目录失败不该让选择器不可用）。 */
 	private async loadModels(credential: TraeCredential, token: vscode.CancellationToken): Promise<void> {
 		const fetchModels = this.options.fetchModels;
-		if (fetchModels === undefined) {
-			logWarn('loadModels: 未注入 fetchModels → 保持兜底表');
-			return;
-		}
-		log('loadModels: 开始拉取远端目录…');
+		if (fetchModels === undefined) {return;}
 		try {
 			const payload = await fetchModels(credential);
-			if (token.isCancellationRequested) {
-				log('loadModels: 已取消');
-				return;
-			}
-			log(`loadModels: 响应结构\n${describeTraeCatalog(payload)}`);
+			if (token.isCancellationRequested) {return;}
 			const models = parseTraeBatchModelList(payload);
-			log(`loadModels: 解析出 ${models.length} 个模型：${models.map((m) => m.id).join(', ')}`);
-			if (models.length === 0) {
-				logWarn('loadModels: 解析结果为空 → 回退兜底表（模型列表会显示旧模型）');
-			}
 			// ⚠️ 空结果**也要缓存**（连同时间戳）：未登录 / 上游异常时若保持
 			// `undefined`，下一次 `listModels` 会再拉一次，用户每打开一次模型
 			// 选择器就发一次真实 HTTP 请求。
 			this.remoteModels = models.length > 0 ? models : undefined;
-		} catch (error) {
-			logWarn('loadModels 失败：', error instanceof Error ? `${error.name}: ${error.message}` : String(error));
-			if (error instanceof Error && error.stack !== undefined) {logWarn(error.stack);}
+		} catch {
 			// 失败：保持兜底表（`remoteModels` 仍为 undefined）。
 		} finally {
 			this.catalogLoadedAt = Date.now();
@@ -794,9 +693,6 @@ export async function consumeTraeSse(
 	const emitEvent = (): void => {
 		if (currentEvent.length === 0) {return;}
 		const ev = parseTraeSSELine(currentEvent, currentData);
-		// ⚠️ 逐事件打印（截断）：排障「对话报错」时这是第一手证据 ——
-		// 上游用 HTTP 200 + 流内 `event:error` 下发错误，不看这里就完全看不到原因。
-		log(`SSE event=${currentEvent} data=${brief(currentData, 500)}`);
 		currentEvent = '';
 		currentData = '';
 		if (ev === undefined) {return;}

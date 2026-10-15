@@ -37,7 +37,6 @@ import {
 import {
 	consumeTraeSse,
 	defaultTraeEffort,
-	describeTraeCatalog,
 	messagesToTrae,
 	strongestTraeEffort,
 	traeDisplayName,
@@ -574,20 +573,6 @@ suite('TRAE (字节) 测试', () => {
 			new vscode.CancellationTokenSource().token,
 		);
 		assert.ok(models.length > 0, '失败时应回退兜底表而不是空列表');
-	});
-
-	test('目录结构诊断能区分「上游没下发」与「被白名单剔除」', () => {
-		const text = describeTraeCatalog({
-			function_configs: [
-				{ function: 'solo_agent', config_info_list: [{ config_name: 'a' }] },
-				{ function: 'chat', config_info_list: [{ config_name: 'b' }, { config_name: 'c' }] },
-			],
-		});
-		assert.ok(text.includes('solo_agent: 1 条'));
-		assert.ok(text.includes('chat: 2 条（不在白名单，整组丢弃）'));
-		// 非预期形状也要给出可读原因。
-		assert.ok(describeTraeCatalog(null).includes('不是对象'));
-		assert.ok(describeTraeCatalog({ foo: 1 }).includes('没有 function_configs'));
 	});
 
 	// ── SSE 消费 ──

@@ -664,17 +664,13 @@ export async function fetchTraeModels(
 		show_custom_model: true,
 	};
 	const url = `${TRAE_AGENT_HOST}${TRAE_BATCH_MODELS_PATH}`;
-	console.log('[TRAE] fetchTraeModels: POST', url, 'functions=', TRAE_QUERY_FUNCTIONS.length);
 	const response = await fetcher(url, {
 		method: 'POST',
 		headers: traeSOLOHeaders(credential, false),
 		body: JSON.stringify(bodyObj),
 		signal: AbortSignal.timeout(TRAE_REQUEST_TIMEOUT_MS),
 	});
-	console.log('[TRAE] fetchTraeModels: HTTP', response.status, response.statusText);
 	if (!response.ok) {
-		const text = await response.text().catch(() => '');
-		console.warn('[TRAE] fetchTraeModels: 非 2xx，响应体：', text.slice(0, 1000));
 		throw new Error(`${SERVER_ERROR_PREFIX}（HTTP ${response.status}）`);
 	}
 	return await response.json() as unknown;
