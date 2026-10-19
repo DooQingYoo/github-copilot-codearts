@@ -48,7 +48,7 @@ export const OPENROUTER_FALLBACK_MAX_OUTPUT_TOKENS = 16_000;
  * 写 `deepseek-v4.1-flash` 会匹配不到（目录里不存在这个 key）。
  */
 export const OPENROUTER_PAID_MODEL_IDS: readonly string[] = [
-	'deepseek/deepseek-v4.1-flash',
+	'deepseek/deepseek-v4.1-flash-1017',
 	'z-ai/glm-5.3-flash',
 ];
 

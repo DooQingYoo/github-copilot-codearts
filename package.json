@@ -2,7 +2,7 @@
   "name": "github-copilot-codearts",
   "displayName": "github copilot codearts",
   "description": "将腾讯 CodeBuddy 国内版、阿里 Qoder 中国版、字节 TRAE 与 OpenRouter（可自选上游供应商）模型接入 VS Code Copilot Chat 与 Agent。",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "license": "MIT",
   "engines": {
     "vscode": "^1.140.0"

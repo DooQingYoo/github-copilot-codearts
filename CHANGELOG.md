@@ -6,6 +6,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.0.6]
+
+### Added
+
+deepseek v4.1 flash 1017 版本
+
 ## [0.0.5]
 
 ### Added
